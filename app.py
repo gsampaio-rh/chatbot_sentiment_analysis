@@ -73,23 +73,26 @@ if "chat_history" not in st.session_state:
 st.subheader("💬 Chat")
 user_input = st.chat_input("Say something...")
 if user_input:
-    st.session_state.chat_history.append({"role": "user", "text": user_input})
+    # Immediately render user message and its sentiment
+    sentiment = analyze_sentiment(user_input)
+    st.session_state.chat_history.append(
+        {"role": "user", "text": user_input, "sentiment": sentiment}
+    )
 
+    # Generate bot response
     with st.spinner("Bot is thinking..."):
         bot_response = chat_model(user_input)
-        sentiment = analyze_sentiment(user_input)
-        st.session_state.chat_history.append(
-            {"role": "bot", "text": bot_response, "sentiment": sentiment}
-        )
+        st.session_state.chat_history.append({"role": "bot", "text": bot_response})
 
 # ---- Display Chat ----
 for message in st.session_state.chat_history:
     if message["role"] == "user":
-        st.chat_message("user").markdown(message["text"])
+        with st.chat_message("user"):
+            st.markdown(message["text"])
+            st.caption(f"Sentiment: {message['sentiment']}")
     elif message["role"] == "bot":
         with st.chat_message("assistant"):
             st.markdown(message["text"])
-            st.caption(f"Sentiment: {message['sentiment']}")
 
 # ---- File Uploads ----
 st.sidebar.header("Upload Files")
