@@ -1,0 +1,10 @@
+streamlit
+requests
+pytesseract
+Pillow
+openai-whisper
+matplotlib
+pydub
+langchain
+ollama
+langchain-community
