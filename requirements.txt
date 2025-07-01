@@ -8,3 +8,5 @@ pydub
 langchain
 ollama
 langchain-community
+transformers
+torch

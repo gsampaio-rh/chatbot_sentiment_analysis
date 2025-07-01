@@ -9,6 +9,9 @@ import matplotlib.pyplot as plt
 from io import BytesIO
 from pydub import AudioSegment
 from langchain.llms import Ollama
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+import numpy as np
 
 
 # ---- Helper: List Ollama Models ----
@@ -20,6 +23,25 @@ def list_ollama_models():
         return [m["name"] for m in models]
     except Exception as e:
         return [f"Error: {e}"]
+
+
+# ---- Load CardiffNLP Sentiment Model ----
+sentiment_tokenizer = AutoTokenizer.from_pretrained(
+    "cardiffnlp/twitter-roberta-base-sentiment"
+)
+sentiment_model = AutoModelForSequenceClassification.from_pretrained(
+    "cardiffnlp/twitter-roberta-base-sentiment"
+)
+labels = ["negative", "neutral", "positive"]
+
+
+def analyze_sentiment(text):
+    inputs = sentiment_tokenizer(text, return_tensors="pt", truncation=True)
+    with torch.no_grad():
+        logits = sentiment_model(**inputs).logits
+    probs = torch.nn.functional.softmax(logits, dim=1)
+    sentiment = labels[torch.argmax(probs)]
+    return f"{sentiment.capitalize()} ({probs.max().item():.2f})"
 
 
 # ---- Streamlit Layout ----
@@ -34,19 +56,12 @@ if available_models and not available_models[0].startswith("Error"):
     chat_model_name = st.sidebar.selectbox(
         "Select Chat Model", available_models, index=0
     )
-    sentiment_model_name = st.sidebar.selectbox(
-        "Select Sentiment Model",
-        available_models,
-        index=1 if len(available_models) > 1 else 0,
-    )
 else:
     st.sidebar.warning("Could not fetch models from Ollama.")
     chat_model_name = "llama3"
-    sentiment_model_name = "mistral"
 
 # ---- Initialize Models ----
 chat_model = Ollama(model=chat_model_name)
-sentiment_model = Ollama(model=sentiment_model_name)
 ocr_model = pytesseract  # using Tesseract locally
 transcriber = whisper.load_model("base")  # Whisper for audio transcription
 
@@ -54,10 +69,27 @@ transcriber = whisper.load_model("base")  # Whisper for audio transcription
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
-# ---- Input Area ----
-with st.form("chat_form"):
-    user_input = st.text_input("You:", "Hello, how are you?")
-    submitted = st.form_submit_button("Send")
+# ---- Chat UI ----
+st.subheader("💬 Chat")
+user_input = st.chat_input("Say something...")
+if user_input:
+    st.session_state.chat_history.append({"role": "user", "text": user_input})
+
+    with st.spinner("Bot is thinking..."):
+        bot_response = chat_model(user_input)
+        sentiment = analyze_sentiment(user_input)
+        st.session_state.chat_history.append(
+            {"role": "bot", "text": bot_response, "sentiment": sentiment}
+        )
+
+# ---- Display Chat ----
+for message in st.session_state.chat_history:
+    if message["role"] == "user":
+        st.chat_message("user").markdown(message["text"])
+    elif message["role"] == "bot":
+        with st.chat_message("assistant"):
+            st.markdown(message["text"])
+            st.caption(f"Sentiment: {message['sentiment']}")
 
 # ---- File Uploads ----
 st.sidebar.header("Upload Files")
@@ -65,23 +97,6 @@ img_file = st.sidebar.file_uploader("Upload Image (OCR)", type=["png", "jpg", "j
 audio_file = st.sidebar.file_uploader(
     "Upload Audio (Transcribe & Emotion)", type=["mp3", "wav"]
 )
-
-# ---- Chatbot Response ----
-if submitted and user_input:
-    st.session_state.chat_history.append(("You", user_input))
-
-    with st.spinner("Chatbot thinking..."):
-        bot_response = chat_model(user_input)
-        st.session_state.chat_history.append(("Bot", bot_response))
-
-        sentiment = sentiment_model(
-            f"What is the sentiment of this message: '{user_input}'?"
-        )
-        st.session_state.chat_history.append(("Sentiment", sentiment))
-
-# ---- Display Chat ----
-for speaker, message in st.session_state.chat_history:
-    st.markdown(f"**{speaker}:** {message}")
 
 # ---- OCR ----
 if img_file is not None:
@@ -135,7 +150,7 @@ if audio_file is not None:
 # plt.xlim(-1, len(steps))
 # st.pyplot(fig)
 
-st.markdown("---")
-st.caption(
-    "Demo powered by Streamlit, LangChain, LangGraph, Ollama, Whisper, and Tesseract."
-)
+# st.markdown("---")
+# st.caption(
+#     "Demo powered by Streamlit, LangChain, LangGraph, Ollama, Whisper, Tesseract, and HuggingFace Transformers."
+# )
