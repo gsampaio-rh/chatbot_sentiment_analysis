@@ -192,3 +192,11 @@ user_data/
 inference_engine_cache/
 
 embedding_store/
+
+spacy_model/
+
+corpus/
+
+configs/
+
+dataset/

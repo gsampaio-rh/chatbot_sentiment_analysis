@@ -135,6 +135,16 @@ if audio_file is not None:
             emotion = "😊 Calm / Quiet"
         st.markdown(f"**Emotion Estimate:** {emotion}")
 
+    # Soundwave Visualization
+    st.subheader("📈 Soundwave")
+    samples = np.array(audio.get_array_of_samples())
+    fig, ax = plt.subplots(figsize=(10, 2))
+    ax.plot(samples)
+    ax.set_title("Waveform")
+    ax.set_xlabel("Samples")
+    ax.set_ylabel("Amplitude")
+    st.pyplot(fig)
+
 # ---- Timeline Visual ----
 # st.markdown("---")
 # st.subheader("📊 Process Flow")

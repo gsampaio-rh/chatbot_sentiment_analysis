@@ -10,3 +10,4 @@ ollama
 langchain-community
 transformers
 torch
+librosa
