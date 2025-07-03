@@ -1,0 +1,38 @@
+[
+    {
+        "speaker": "Cliente",
+        "text": "Oi, tem uma árvore encostando na fiação na minha rua."
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Olá! Pode me passar o endereço completo?"
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Rua das Palmeiras, número 44, bairro Centro."
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Obrigado. Essa é uma área de risco?"
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Sim. Ontem deu um curto e ficou faíscando."
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Vamos priorizar esse atendimento. Em até 48h a equipe estará no local."
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Preciso estar em casa para receber?"
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Não é necessário. Mas mantenha o portão destrancado se for preciso acesso interno."
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Ok, deixo o portão aberto. Obrigado pela agilidade."
+    }
+]

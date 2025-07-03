@@ -1,0 +1,46 @@
+[
+  {
+    "speaker": "Cliente",
+    "text": "Oi, minha conta veio muito alta esse mês e não faz sentido."
+  },
+  {
+    "speaker": "Atendente",
+    "text": "Olá! Vamos verificar isso juntos. Pode me informar seu CPF?"
+  },
+  {
+    "speaker": "Cliente",
+    "text": "Claro, é 123.456.789-00."
+  },
+  {
+    "speaker": "Atendente",
+    "text": "Obrigado. Verificando aqui... realmente houve um aumento no consumo."
+  },
+  {
+    "speaker": "Cliente",
+    "text": "Mas não mudou nada aqui em casa. Isso é impossível."
+  },
+  {
+    "speaker": "Atendente",
+    "text": "Você tem ar-condicionado ou algum equipamento novo em casa?"
+  },
+  {
+    "speaker": "Cliente",
+    "text": "Não. Está tudo igual."
+  },
+  {
+    "speaker": "Atendente",
+    "text": "Entendo. Podemos enviar uma equipe técnica para verificar o medidor."
+  },
+  {
+    "speaker": "Cliente",
+    "text": "Tudo bem. Quando eles vêm?"
+  },
+  {
+    "speaker": "Atendente",
+    "text": "Até 5 dias úteis. Posso agendar para segunda-feira?"
+  },
+  {
+    "speaker": "Cliente",
+    "text": "Pode ser. Obrigado."
+  }
+]

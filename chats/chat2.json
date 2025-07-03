@@ -1,0 +1,46 @@
+[
+    {
+        "speaker": "Cliente",
+        "text": "Boa tarde. Minha luz foi cortada e quero religar."
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Boa tarde! Seu nome completo, por favor?"
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Carlos Alberto Lima."
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Obrigado, Carlos. Verificando... há uma fatura em aberto de R$ 289,00."
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Eu consigo parcelar esse valor?"
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Sim. Podemos dividir em até 3 vezes no boleto."
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Pode ser. Quero pagar a primeira hoje mesmo."
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Perfeito. Já gerei o boleto e enviarei por e-mail."
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Depois de pagar, quanto tempo demora para religarem?"
+    },
+    {
+        "speaker": "Atendente",
+        "text": "Até 24 horas após a confirmação do pagamento."
+    },
+    {
+        "speaker": "Cliente",
+        "text": "Ok. Obrigado pela ajuda."
+    }
+]

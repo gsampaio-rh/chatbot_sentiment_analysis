@@ -115,30 +115,42 @@ elif input_mode == "Exemplo Interno":
         {"speaker": "Cliente", "text": "Quero cancelar o serviço."},
     ]
 
-# Exibição da conversa como chat
+# Exibição da conversa estilo WhatsApp
 if conversation:
     st.subheader("💬 Conversa")
-    chat_container = st.container()
-    with chat_container:
-        for turn in conversation:
-            st.markdown(f"**{turn['speaker']}**: {turn['text']}")
+    for turn in conversation:
+        alignment = "flex-start" if "cliente" in turn["speaker"].lower() else "flex-end"
+        bubble_color = "#e1ffc7" if "cliente" in turn["speaker"].lower() else "#d2e3fc"
+        sentiment_score = ""
+
+        if sentiment_choice == "spaCy local":
+            doc = nlp_sentiment(turn["text"])
+            sentiment = doc.cats
+            label = max(sentiment, key=sentiment.get)
+            score = sentiment[label]
+            sentiment_score = (
+                f"<br><small>Sentimento: {label} ({score*100:.1f}%)</small>"
+            )
+        else:
+            # sentiment_model = pipeline("sentiment-analysis")
+            # Diretamente do Hugging Face
+            sentiment_model = pipeline("text-classification", model="pysentimiento/bertweet-pt-sentiment")
+
+            sentiment_result = sentiment_model(turn["text"])[0]
+            sentiment_score = f"<br><small>Sentimento: {sentiment_result['label']} ({sentiment_result['score']*100:.1f}%)</small>"
+
+        st.markdown(
+            f"""
+        <div style='display: flex; justify-content: {alignment}; padding: 4px 0;'>
+            <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 70%;'>
+                <strong>{turn['speaker']}</strong><br>{turn['text']}{sentiment_score}
+            </div>
+        </div>
+        """,
+            unsafe_allow_html=True,
+        )
 
     full_transcript = " ".join([turn["text"] for turn in conversation])
-
-    # Análise de Sentimento
-    st.subheader("❤️ Análise de Sentimento")
-    if sentiment_choice == "spaCy local":
-        doc = nlp_sentiment(full_transcript)
-        sentiment = doc.cats
-        label = max(sentiment, key=sentiment.get)
-        score = sentiment[label]
-        st.write(f"**Sentimento (spaCy):** {label} ({score*100:.1f}%)")
-    else:
-        sentiment_model = pipeline("sentiment-analysis")
-        sentiment_result = sentiment_model(full_transcript)[0]
-        st.write(
-            f"**Sentimento (Transformers):** {sentiment_result['label']} ({sentiment_result['score']*100:.1f}%)"
-        )
 
     # Predição de Intenção
     st.subheader("🎯 Predição de Intenção")
