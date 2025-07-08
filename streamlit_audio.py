@@ -2,7 +2,6 @@ import streamlit as st
 import librosa
 import numpy as np
 import torch
-import torchaudio
 import whisper
 import tempfile
 import matplotlib.pyplot as plt
@@ -19,13 +18,27 @@ from pyannote.core import Segment
 import subprocess
 import os
 
-# ------------------- FUNCTIONS --------------------
-def format_time(secs):
-    return str(datetime.timedelta(seconds=int(secs)))
+
+def convert_to_wav(input_path):
+    output_path = input_path.rsplit(".", 1)[0] + ".wav"
+    command = [
+        "ffmpeg",
+        "-y",
+        "-i",
+        input_path,
+        "-acodec",
+        "pcm_s16le",
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        output_path,
+    ]
+    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return output_path
+
 
 def whisper_diarize(audio_path, num_speakers=2, model_size="base", language="pt"):
-
-    # --- Device selection ---
     if torch.backends.mps.is_available():
         device = torch.device("mps")
     elif torch.cuda.is_available():
@@ -34,30 +47,19 @@ def whisper_diarize(audio_path, num_speakers=2, model_size="base", language="pt"
         device = torch.device("cpu")
     st.write(f"Usando dispositivo: `{device}`")
 
-    # --- Transcribe with Whisper ---
-    st.info("Transcrevendo com Whisper...")
     whisper_model = whisper.load_model(model_size)
     result = whisper_model.transcribe(audio_path, language=language)
     segments = result["segments"]
 
-    # --- Get duration safely using torchaudio ---
-    try:
-        waveform, sr = torchaudio.load(audio_path)
-        duration = waveform.shape[1] / sr
-    except Exception as e:
-        st.error(f"Erro ao calcular duração do áudio: {e}")
-        return []
+    with contextlib.closing(wave.open(audio_path, "r")) as f:
+        frames = f.getnframes()
+        rate = f.getframerate()
+        duration = frames / float(rate)
 
-    # --- Embedding model ---
-    st.info("Extraindo embeddings de falantes...")
-    try:
-        embedding_model = PretrainedSpeakerEmbedding(
-            "speechbrain/spkrec-ecapa-voxceleb", device=device
-        )
-        audio = Audio()
-    except Exception as e:
-        st.error(f"Erro ao carregar modelo de embedding: {e}")
-        return []
+    embedding_model = PretrainedSpeakerEmbedding(
+        "speechbrain/spkrec-ecapa-voxceleb", device=device
+    )
+    audio = Audio()
 
     def segment_embedding(segment):
         start = segment["start"]
@@ -75,12 +77,10 @@ def whisper_diarize(audio_path, num_speakers=2, model_size="base", language="pt"
             st.warning(f"Falha ao extrair embedding do segmento ({start}-{end}s): {e}")
             return np.zeros((192,))
 
-    # --- Get embeddings ---
     embeddings = np.zeros((len(segments), 192))
     for i, segment in enumerate(segments):
         embeddings[i] = segment_embedding(segment)
 
-    # --- Verifica uniformidade dos embeddings ---
     if np.allclose(embeddings, embeddings[0]):
         st.warning(
             "Todos os embeddings são semelhantes. Diarização pode estar falhando."
@@ -89,18 +89,13 @@ def whisper_diarize(audio_path, num_speakers=2, model_size="base", language="pt"
             segments[i]["speaker"] = "Speaker 1"
         return segments
 
-    # --- Clustering ---
-    try:
-        clustering = AgglomerativeClustering(n_clusters=num_speakers).fit(embeddings)
-        labels = clustering.labels_
-        for i in range(len(segments)):
-            segments[i]["speaker"] = f"Speaker {labels[i] + 1}"
-    except Exception as e:
-        st.error(f"Erro na clusterização dos embeddings: {e}")
-        for i in range(len(segments)):
-            segments[i]["speaker"] = "Speaker 1"
+    clustering = AgglomerativeClustering(n_clusters=num_speakers).fit(embeddings)
+    labels = clustering.labels_
+    for i in range(len(segments)):
+        segments[i]["speaker"] = f"Speaker {labels[i] + 1}"
 
     return segments
+
 
 # ------------------- SIDEBAR ----------------------
 st.set_page_config(page_title="Voice Intelligence App", layout="wide")
@@ -158,128 +153,155 @@ with st.sidebar:
 nlp_sentiment = spacy.load("spacy_model/model-best")
 intent_model = pipeline("text-classification", model="bert-base-uncased")
 
-# ------------------- INTERFACE PRINCIPAL ----------------------
+# ------------------- SESSION STATE ----------------------
+if "conversation" not in st.session_state:
+    st.session_state.conversation = []
+if "sentiments" not in st.session_state:
+    st.session_state.sentiments = []
+if "intent" not in st.session_state:
+    st.session_state.intent = None
+if "audio_path" not in st.session_state:
+    st.session_state.audio_path = None
+
+# ------------------- INTERFACE ----------------------
 st.title("🎙️ Voice Intelligence App")
 st.markdown(
-    "Upload de conversa em áudio ou texto para análise automática de sentimento e intenção com experiência visual refinada."
+    "Upload de conversa em áudio ou texto para análise manual de transcrição, sentimento e intenção."
 )
-
-conversation = []
 
 if input_mode == "MP3/WAV":
     uploaded_file = st.file_uploader(
         "🔊 Envie um arquivo de áudio", type=["wav", "mp3"]
     )
     if uploaded_file:
-        st.audio(uploaded_file, format="audio/wav")
-
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-            # Convert to WAV if needed
-            audio_path = tmp.name
-            input_path = os.path.join(tempfile.gettempdir(), uploaded_file.name)
-            with open(input_path, "wb") as f:
-                f.write(uploaded_file.read())
-            if not input_path.endswith(".wav"):
-                subprocess.call(["ffmpeg", "-i", input_path, audio_path, "-y"])
-            else:
-                audio_path = input_path
-
+        st.audio(uploaded_file)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_file:
+            tmp_file.write(uploaded_file.read())
+            input_path = tmp_file.name
+        tmp_path = convert_to_wav(input_path)
+        st.session_state.audio_path = tmp_path
         st.success("Audio uploaded and converted!")
-
-        with st.spinner("🔈 Carregando e processando áudio..."):
-            y, sr = librosa.load(audio_path, sr=None)
-            plt.figure(figsize=(10, 1))
-            plt.plot(y)
-            plt.title("Forma de onda do áudio")
-            plt.xlabel("Amostras")
-            plt.ylabel("Amplitude")
-            st.pyplot(plt.gcf())
-
-        with st.spinner("🔍 Transcrevendo com Whisper..."):
-            if diariazacao:
-                diarized_segments = whisper_diarize(
-                    audio_path,
-                    num_speakers=num_speakers,
-                    model_size=model_size,
-                    language=language,
-                )
-                for seg in diarized_segments:
-                    conversation.append(
-                        {"speaker": seg["speaker"], "text": seg["text"].strip()}
-                    )
-            else:
-                whisper_model = whisper.load_model(model_size)
-                result = whisper_model.transcribe(audio_path, language=language)
-                conversation.append(
-                    {"speaker": "Speaker 1", "text": result["text"].strip()}
-                )
+        y, sr = librosa.load(tmp_path, sr=None)
+        plt.figure(figsize=(10, 1))
+        plt.plot(y)
+        plt.title("Forma de onda do áudio")
+        plt.xlabel("Amostras")
+        plt.ylabel("Amplitude")
+        st.pyplot(plt.gcf())
 
 elif input_mode == "Arquivo de Transcrição (.json)":
     uploaded_json = st.file_uploader(
         "📄 Envie o arquivo de transcrição (.json)", type=["json"]
     )
     if uploaded_json:
-        conversation = json.load(uploaded_json)
+        st.session_state.conversation = json.load(uploaded_json)
 
 elif input_mode == "Exemplo Interno":
-    conversation = [
+    st.session_state.conversation = [
         {"speaker": "Cliente", "text": "Oi, estou com um problema na minha conta."},
         {"speaker": "Atendente", "text": "Claro, posso verificar isso para você."},
         {"speaker": "Cliente", "text": "Quero cancelar o serviço."},
     ]
 
-# ------------------- EXIBIÇÃO ----------------------
-if conversation:
+# ------------------- CONTROLES ----------------------
+if input_mode == "MP3/WAV" and st.session_state.audio_path:
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        if st.button("🎙 Transcrever Áudio"):
+            with st.spinner("Transcrevendo com Whisper..."):
+                if diariazacao:
+                    diarized_segments = whisper_diarize(
+                        st.session_state.audio_path, num_speakers, model_size, language
+                    )
+                    st.session_state.conversation = [
+                        {"speaker": s["speaker"], "text": s["text"].strip()}
+                        for s in diarized_segments
+                    ]
+                else:
+                    model = whisper.load_model(model_size)
+                    result = model.transcribe(
+                        st.session_state.audio_path, language=language
+                    )
+                    st.session_state.conversation = [
+                        {"speaker": "Speaker 1", "text": result["text"].strip()}
+                    ]
+
+    with col2:
+        if st.button(
+            "🧠 Analisar Sentimento", disabled=not st.session_state.conversation
+        ):
+            results = []
+            with st.spinner("Analisando sentimentos..."):
+                for turn in st.session_state.conversation:
+                    if sentiment_choice == "spaCy local":
+                        doc = nlp_sentiment(turn["text"])
+                        cats = doc.cats
+                        label = max(cats, key=cats.get)
+                        score = cats[label]
+                    else:
+                        sent_model = pipeline(
+                            "text-classification",
+                            model="pysentimiento/bertweet-pt-sentiment",
+                        )
+                        r = sent_model(turn["text"])[0]
+                        label = r["label"]
+                        score = r["score"]
+                    results.append(
+                        {
+                            "speaker": turn["speaker"],
+                            "text": turn["text"],
+                            "label": label,
+                            "score": score,
+                        }
+                    )
+            st.session_state.sentiments = results
+
+    with col3:
+        if st.button(
+            "🎯 Detectar Intenção", disabled=not st.session_state.conversation
+        ):
+            full_text = " ".join([x["text"] for x in st.session_state.conversation])
+            result = intent_model(full_text)[0]
+            st.session_state.intent = result
+
+if st.session_state.conversation:
     st.subheader("💬 Conversa")
-    for turn in conversation:
-        # Define cores distintas para até 5 falantes
-        speaker_colors = {
-            "Speaker 1": "#e1ffc7",
-            "Speaker 2": "#d2e3fc",
-            "Speaker 3": "#ffe0e0",
-            "Speaker 4": "#f0e68c",
-            "Speaker 5": "#d1c4e9",
-        }
+
+    speaker_colors = {
+        "Speaker 1": "#e1ffc7",
+        "Speaker 2": "#d2e3fc",
+        "Speaker 3": "#ffe0e0",
+        "Speaker 4": "#f0e68c",
+        "Speaker 5": "#d1c4e9",
+    }
+
+    for turn in st.session_state.conversation:
         speaker = turn["speaker"]
         bubble_color = speaker_colors.get(speaker, "#eeeeee")
         alignment = "flex-start" if speaker.endswith("1") else "flex-end"
-        sentiment_score = ""
 
-        with st.spinner("📊 Analisando sentimento..."):
-            if sentiment_choice == "spaCy local":
-                doc = nlp_sentiment(turn["text"])
-                sentiment = doc.cats
-                label = max(sentiment, key=sentiment.get)
-                score = sentiment[label]
-                sentiment_score = (
-                    f"<br><small>Sentimento: {label} ({score*100:.1f}%)</small>"
-                )
-            else:
-                sentiment_model = pipeline(
-                    "text-classification", model="pysentimiento/bertweet-pt-sentiment"
-                )
-                sentiment_result = sentiment_model(turn["text"])[0]
-                sentiment_score = f"<br><small>Sentimento: {sentiment_result['label']} ({sentiment_result['score']*100:.1f}%)</small>"
+        sentiment_info = ""
+        for s in st.session_state.sentiments:
+            if s["text"] == turn["text"]:
+                sentiment_info = f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
 
         st.markdown(
             f"""
             <div style='display: flex; justify-content: {alignment}; padding: 4px 0;'>
                 <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 70%;'>
-                    <strong>{turn['speaker']}</strong><br>{turn['text']}{sentiment_score}
+                    <strong>{speaker}</strong><br>{turn['text']}{sentiment_info}
                 </div>
             </div>
             """,
             unsafe_allow_html=True,
         )
 
-    full_transcript = " ".join([turn["text"] for turn in conversation])
-
-    # st.subheader("🎯 Predição de Intenção")
-    # with st.spinner("🎯 Classificando intenção..."):
-    #     intent_result = intent_model(full_transcript)[0]
-    #     st.write(
-    #         f"**Intenção prevista:** {intent_result['label']} ({intent_result['score']*100:.1f}%)"
-    #     )
+    if st.session_state.intent:
+        st.subheader("🎯 Intenção detectada")
+        st.markdown(
+            f"**{st.session_state.intent['label']}** ({st.session_state.intent['score']*100:.1f}%)"
+        )
 
 # ------------------- ESTILO ----------------------
 st.markdown(
