@@ -17,7 +17,7 @@ from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbed
 from pyannote.core import Segment
 import subprocess
 import os
-
+import time
 
 def convert_to_wav(input_path):
     output_path = input_path.rsplit(".", 1)[0] + ".wav"
@@ -94,7 +94,7 @@ def whisper_diarize(audio_path, num_speakers=2, model_size="base", language="pt"
     for i in range(len(segments)):
         segments[i]["speaker"] = f"Speaker {labels[i] + 1}"
 
-    return segments
+    return segments, str(device)
 
 
 # ------------------- SIDEBAR ----------------------
@@ -209,11 +209,13 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
 
     with col1:
         if st.button("🎙 Transcrever Áudio"):
+            start_time = time.time()
             with st.spinner("Transcrevendo com Whisper..."):
                 if diariazacao:
-                    diarized_segments = whisper_diarize(
+                    diarized_segments, used_device = whisper_diarize(
                         st.session_state.audio_path, num_speakers, model_size, language
                     )
+                    st.session_state.device = used_device
                     st.session_state.conversation = [
                         {"speaker": s["speaker"], "text": s["text"].strip()}
                         for s in diarized_segments
@@ -221,16 +223,21 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
                 else:
                     model = whisper.load_model(model_size)
                     result = model.transcribe(
-                        st.session_state.audio_path, language=language
+                        st.session_state.audio_path, language=language, verbose=None
                     )
+                    st.session_state.device = "cpu (sem diarização)"
                     st.session_state.conversation = [
                         {"speaker": "Speaker 1", "text": result["text"].strip()}
                     ]
+            duration = time.time() - start_time
+            st.success(f"✅ Transcrição concluída em {duration:.2f} segundos")
+            st.markdown(f"**Dispositivo usado:** `{st.session_state.device}`")
 
     with col2:
         if st.button(
             "🧠 Analisar Sentimento", disabled=not st.session_state.conversation
         ):
+            start_time = time.time()
             results = []
             with st.spinner("Analisando sentimentos..."):
                 for turn in st.session_state.conversation:
@@ -256,14 +263,20 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
                         }
                     )
             st.session_state.sentiments = results
+            duration = time.time() - start_time
+            st.success(f"✅ Sentimento analisado em {duration:.2f} segundos")
 
     with col3:
         if st.button(
             "🎯 Detectar Intenção", disabled=not st.session_state.conversation
         ):
+            start_time = time.time()
             full_text = " ".join([x["text"] for x in st.session_state.conversation])
             result = intent_model(full_text)[0]
             st.session_state.intent = result
+            duration = time.time() - start_time
+            st.success(f"✅ Intenção detectada em {duration:.2f} segundos")
+
 
 if st.session_state.conversation:
     st.subheader("💬 Conversa")
