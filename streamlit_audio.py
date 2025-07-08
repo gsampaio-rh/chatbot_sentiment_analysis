@@ -2,120 +2,128 @@ import streamlit as st
 import librosa
 import numpy as np
 import torch
-import whisper
 import tempfile
 import matplotlib.pyplot as plt
 import spacy
 import json
-import datetime
 import wave
 import contextlib
 from transformers import pipeline
-from sklearn.cluster import AgglomerativeClustering
-from pyannote.audio import Audio
-from pyannote.audio.pipelines.speaker_verification import PretrainedSpeakerEmbedding
-from pyannote.core import Segment
 import subprocess
-import os
 import time
+import logging
+from pathlib import Path
 
-def convert_to_wav(input_path):
-    output_path = input_path.rsplit(".", 1)[0] + ".wav"
+from faster_whisper import WhisperModel  # ➜ nova lib
+
+# ===============================================================
+#  Modelos disponíveis no Hub → dict <apelido> : <repo HF>
+# ===============================================================
+_MODELS = {
+    "tiny.en": "Systran/faster-whisper-tiny.en",
+    "tiny": "Systran/faster-whisper-tiny",
+    "base.en": "Systran/faster-whisper-base.en",
+    "base": "Systran/faster-whisper-base",
+    "small.en": "Systran/faster-whisper-small.en",
+    "small": "Systran/faster-whisper-small",
+    "medium.en": "Systran/faster-whisper-medium.en",
+    "medium": "Systran/faster-whisper-medium",
+    "large-v1": "Systran/faster-whisper-large-v1",
+    "large-v2": "Systran/faster-whisper-large-v2",
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "large": "Systran/faster-whisper-large-v3",
+    "distil-large-v2": "Systran/faster-distil-whisper-large-v2",
+    "distil-medium.en": "Systran/faster-distil-whisper-medium.en",
+    "distil-small.en": "Systran/faster-distil-whisper-small.en",
+    "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
+    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
+    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    "turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+}
+
+# ===============================================================
+#  Utilidades
+# ===============================================================
+
+
+def convert_to_wav(input_path: str) -> str:
+    """Converte qualquer áudio compatível com FFmpeg para mono WAV 16 kHz."""
+    output_path = Path(input_path).with_suffix(".wav")
     command = [
         "ffmpeg",
-        "-y",
+        "-y",  # overwrite
         "-i",
         input_path,
         "-acodec",
         "pcm_s16le",
         "-ac",
-        "1",
+        "1",  # mono
         "-ar",
-        "16000",
-        output_path,
+        "16000",  # 16 kHz
+        str(output_path),
     ]
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return output_path
+    return str(output_path)
 
 
-def whisper_diarize(audio_path, num_speakers=2, model_size="base", language="pt"):
-    if torch.backends.mps.is_available():
-        device = torch.device("mps")
-    elif torch.cuda.is_available():
-        device = torch.device("cuda")
-    else:
-        device = torch.device("cpu")
-    st.write(f"Usando dispositivo: `{device}`")
+# ===============================================================
+#  Configuração de LOGS → Streamlit
+# ===============================================================
+log_placeholder = st.empty()  # espaço para mostrar logs "verbose"
 
-    whisper_model = whisper.load_model(model_size)
-    result = whisper_model.transcribe(audio_path, language=language)
-    segments = result["segments"]
 
-    with contextlib.closing(wave.open(audio_path, "r")) as f:
-        frames = f.getnframes()
-        rate = f.getframerate()
-        duration = frames / float(rate)
+class StreamlitLogHandler(logging.Handler):
+    """Handler que envia logs para um widget Streamlit em tempo real."""
 
-    embedding_model = PretrainedSpeakerEmbedding(
-        "speechbrain/spkrec-ecapa-voxceleb", device=device
-    )
-    audio = Audio()
-
-    def segment_embedding(segment):
-        start = segment["start"]
-        end = min(duration, segment["end"])
-        if end - start < 0.5:
-            return np.zeros((192,))
-        try:
-            clip = Segment(start, end)
-            waveform, sample_rate = audio.crop(audio_path, clip)
-            if waveform.shape[0] > 1:
-                waveform = waveform[0].unsqueeze(0)
-            embedding = embedding_model(waveform[None].to(device))
-            return embedding.squeeze()
-        except Exception as e:
-            st.warning(f"Falha ao extrair embedding do segmento ({start}-{end}s): {e}")
-            return np.zeros((192,))
-
-    embeddings = np.zeros((len(segments), 192))
-    for i, segment in enumerate(segments):
-        embeddings[i] = segment_embedding(segment)
-
-    if np.allclose(embeddings, embeddings[0]):
-        st.warning(
-            "Todos os embeddings são semelhantes. Diarização pode estar falhando."
+    def __init__(self, placeholder, max_lines: int = 400):
+        super().__init__()
+        self.placeholder = placeholder
+        self.lines: list[str] = []
+        self.max_lines = max_lines
+        self.setFormatter(
+            logging.Formatter(
+                fmt="%(asctime)s | %(levelname)s | %(name)s ⟩ %(message)s",
+                datefmt="%H:%M:%S",
+            )
         )
-        for i in range(len(segments)):
-            segments[i]["speaker"] = "Speaker 1"
-        return segments
 
-    clustering = AgglomerativeClustering(n_clusters=num_speakers).fit(embeddings)
-    labels = clustering.labels_
-    for i in range(len(segments)):
-        segments[i]["speaker"] = f"Speaker {labels[i] + 1}"
-
-    return segments, str(device)
+    def emit(self, record):
+        self.lines.append(self.format(record))
+        self.lines = self.lines[-self.max_lines :]
+        self.placeholder.code("\n".join(self.lines), language="text")
 
 
-# ------------------- SIDEBAR ----------------------
-st.set_page_config(page_title="Voice Intelligence App", layout="wide")
+# Aponta o logger interno do faster-whisper para o handler acima
+fw_logger = logging.getLogger("faster_whisper")
+fw_logger.setLevel(logging.DEBUG)
+fw_logger.addHandler(StreamlitLogHandler(log_placeholder))
+
+
+# ===============================================================
+#  Barra lateral – Configurações
+# ===============================================================
+
+st.set_page_config(page_title="Voice Intelligence – faster-whisper", layout="wide")
 
 with st.sidebar:
     st.title("⚙️ Configurações")
+
     input_mode = st.radio(
         "Tipo de Entrada:",
         ("MP3/WAV", "Arquivo de Transcrição (.json)", "Exemplo Interno"),
     )
+
     sentiment_choice = st.radio(
         "Modelo de Sentimento:", ("spaCy local", "Transformers (online)")
     )
-    diariazacao = st.checkbox("Realizar diarização de falantes", value=True)
-    num_speakers = st.slider("Número de falantes", 2, 5, 2)
-    model_size = st.selectbox(
-        "Tamanho do modelo Whisper",
-        ["tiny", "base", "small", "medium", "large"],
-        index=1,
+
+    # Select com os apelidos dos modelos disponíveis
+    model_key = st.selectbox(
+        "Modelo faster-whisper",
+        list(_MODELS.keys()),
+        index=list(_MODELS.keys()).index("base"),
     )
+
     language = st.selectbox(
         "Idioma do áudio",
         options=[
@@ -149,24 +157,89 @@ with st.sidebar:
         index=0,
     )
 
-# ------------------- MODELS -----------------------
+# ===============================================================
+#  Modelos de Sentimento & Intenção
+# ===============================================================
+
 nlp_sentiment = spacy.load("spacy_model/model-best")
 intent_model = pipeline("text-classification", model="bert-base-uncased")
 
-# ------------------- SESSION STATE ----------------------
-if "conversation" not in st.session_state:
-    st.session_state.conversation = []
-if "sentiments" not in st.session_state:
-    st.session_state.sentiments = []
-if "intent" not in st.session_state:
-    st.session_state.intent = None
-if "audio_path" not in st.session_state:
-    st.session_state.audio_path = None
+# ===============================================================
+#  Session State (inicializa chaves)
+# ===============================================================
 
-# ------------------- INTERFACE ----------------------
-st.title("🎙️ Voice Intelligence App")
+for key, default in {
+    "conversation": [],
+    "sentiments": [],
+    "intent": None,
+    "audio_path": None,
+    "device_name": "",
+}.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
+
+
+# ===============================================================
+#  Funções de transcrição com barra de progresso
+# ===============================================================
+
+
+@st.cache_resource(show_spinner="🔄 Carregando modelo faster-whisper…")
+def load_whisper(model_size: str):
+    """Carrega o modelo apenas 1× (cache). Também anota em qual dispositivo."""
+    if torch.cuda.is_available():
+        device = "cuda"
+        compute_type = "float16"
+    # elif torch.backends.mps.is_available():
+    #     device = "mps"
+    #     compute_type = "float16"
+    else:
+        device = "cpu"
+        compute_type = "int8"
+
+    model = WhisperModel(model_size, device=device, compute_type=compute_type)
+    # Armazenamos o nome do dispositivo para uso posterior
+    model.meta_device = device  # atributo extra, não existe na lib
+    return model
+
+
+def transcribe_with_progress(audio_path: str, model_size: str, language: str):
+    model = load_whisper(model_size)
+
+    pbar = st.progress(0, text="Transcrevendo…")
+    txt_placeholder = st.empty()
+
+    segments, info = model.transcribe(
+        audio=audio_path,
+        beam_size=5,
+        word_timestamps=True,
+        vad_filter=True,
+        log_progress=True,
+        language=language,
+    )
+
+    transcript_lines = []
+    total = None
+
+    for seg in segments:
+        transcript_lines.append(f"[{seg.start:7.2f}s → {seg.end:7.2f}s] {seg.text}")
+        txt_placeholder.text("\n".join(transcript_lines))
+
+        total = info.duration or total
+        if total:
+            pbar.progress(min(seg.end / total, 1.0))
+
+    pbar.empty()
+    return "\n".join(transcript_lines), model.meta_device
+
+
+# ===============================================================
+#  Interface principal
+# ===============================================================
+
+st.title("🎙️ Voice Intelligence App – faster-whisper")
 st.markdown(
-    "Upload de conversa em áudio ou texto para análise manual de transcrição, sentimento e intenção."
+    "Upload de áudio ou texto para análise de transcrição, sentimento e intenção."
 )
 
 if input_mode == "MP3/WAV":
@@ -175,13 +248,16 @@ if input_mode == "MP3/WAV":
     )
     if uploaded_file:
         st.audio(uploaded_file)
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".tmp") as tmp_file:
-            tmp_file.write(uploaded_file.read())
-            input_path = tmp_file.name
-        tmp_path = convert_to_wav(input_path)
-        st.session_state.audio_path = tmp_path
-        st.success("Audio uploaded and converted!")
-        y, sr = librosa.load(tmp_path, sr=None)
+        with tempfile.NamedTemporaryFile(
+            delete=False, suffix="." + uploaded_file.name.split(".")[-1]
+        ) as tmp_in:
+            tmp_in.write(uploaded_file.read())
+            raw_path = tmp_in.name
+        wav_path = convert_to_wav(raw_path)
+        st.session_state.audio_path = wav_path
+        st.success("✅ Áudio carregado e convertido para WAV!")
+
+        y, sr = librosa.load(wav_path, sr=None)
         plt.figure(figsize=(10, 1))
         plt.plot(y)
         plt.title("Forma de onda do áudio")
@@ -198,48 +274,36 @@ elif input_mode == "Arquivo de Transcrição (.json)":
 
 elif input_mode == "Exemplo Interno":
     st.session_state.conversation = [
-        {"speaker": "Cliente", "text": "Oi, estou com um problema na minha conta."},
-        {"speaker": "Atendente", "text": "Claro, posso verificar isso para você."},
-        {"speaker": "Cliente", "text": "Quero cancelar o serviço."},
+        {"speaker": "Speaker 1", "text": "Oi, estou com um problema na minha conta."},
+        {"speaker": "Speaker 2", "text": "Claro, posso verificar isso para você."},
+        {"speaker": "Speaker 1", "text": "Quero cancelar o serviço."},
     ]
 
 # ------------------- CONTROLES ----------------------
 if input_mode == "MP3/WAV" and st.session_state.audio_path:
     col1, col2, col3 = st.columns(3)
 
+    # ---------- TRANSCRIÇÃO ----------
     with col1:
         if st.button("🎙 Transcrever Áudio"):
-            start_time = time.time()
-            with st.spinner("Transcrevendo com Whisper..."):
-                if diariazacao:
-                    diarized_segments, used_device = whisper_diarize(
-                        st.session_state.audio_path, num_speakers, model_size, language
-                    )
-                    st.session_state.device = used_device
-                    st.session_state.conversation = [
-                        {"speaker": s["speaker"], "text": s["text"].strip()}
-                        for s in diarized_segments
-                    ]
-                else:
-                    model = whisper.load_model(model_size)
-                    result = model.transcribe(
-                        st.session_state.audio_path, language=language, verbose=None
-                    )
-                    st.session_state.device = "cpu (sem diarização)"
-                    st.session_state.conversation = [
-                        {"speaker": "Speaker 1", "text": result["text"].strip()}
-                    ]
-            duration = time.time() - start_time
-            st.success(f"✅ Transcrição concluída em {duration:.2f} segundos")
-            st.markdown(f"**Dispositivo usado:** `{st.session_state.device}`")
+            start = time.time()
+            with st.spinner("Transcrevendo…"):
+                text, device_name = transcribe_with_progress(
+                    st.session_state.audio_path, model_key, language
+                )
+                st.session_state.device_name = device_name
+                st.session_state.conversation = [{"speaker": "Speaker 1", "text": text}]
+            st.success(f"✅ Transcrição concluída em {time.time() - start:.2f}s")
+            st.markdown(f"**Dispositivo:** `{st.session_state.device_name}`")
 
+    # ---------- SENTIMENTO ----------
     with col2:
         if st.button(
             "🧠 Analisar Sentimento", disabled=not st.session_state.conversation
         ):
-            start_time = time.time()
+            start = time.time()
             results = []
-            with st.spinner("Analisando sentimentos..."):
+            with st.spinner("Analisando sentimentos…"):
                 for turn in st.session_state.conversation:
                     if sentiment_choice == "spaCy local":
                         doc = nlp_sentiment(turn["text"])
@@ -263,21 +327,21 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
                         }
                     )
             st.session_state.sentiments = results
-            duration = time.time() - start_time
-            st.success(f"✅ Sentimento analisado em {duration:.2f} segundos")
+            st.success(f"✅ Sentimentos analisados em {time.time() - start:.2f}s")
 
+    # ---------- INTENÇÃO ----------
     with col3:
         if st.button(
             "🎯 Detectar Intenção", disabled=not st.session_state.conversation
         ):
-            start_time = time.time()
+            start = time.time()
             full_text = " ".join([x["text"] for x in st.session_state.conversation])
-            result = intent_model(full_text)[0]
+            with st.spinner("Detectando intenção…"):
+                result = intent_model(full_text)[0]
             st.session_state.intent = result
-            duration = time.time() - start_time
-            st.success(f"✅ Intenção detectada em {duration:.2f} segundos")
+            st.success(f"✅ Intenção detectada em {time.time() - start:.2f}s")
 
-
+# ------------------- EXIBIÇÃO DA CONVERSA ----------------------
 if st.session_state.conversation:
     st.subheader("💬 Conversa")
 
@@ -294,10 +358,14 @@ if st.session_state.conversation:
         bubble_color = speaker_colors.get(speaker, "#eeeeee")
         alignment = "flex-start" if speaker.endswith("1") else "flex-end"
 
-        sentiment_info = ""
-        for s in st.session_state.sentiments:
-            if s["text"] == turn["text"]:
-                sentiment_info = f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
+        sentiment_info = next(
+            (
+                f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
+                for s in st.session_state.sentiments
+                if s["text"] == turn["text"]
+            ),
+            "",
+        )
 
         st.markdown(
             f"""
@@ -316,24 +384,13 @@ if st.session_state.conversation:
             f"**{st.session_state.intent['label']}** ({st.session_state.intent['score']*100:.1f}%)"
         )
 
-# ------------------- ESTILO ----------------------
+# ------------------- ESTILO GLOBAL ----------------------
 st.markdown(
     """
     <style>
-        .stApp {
-            background-color: #f5f5f5;
-            color: #2c2c2c;
-            font-family: 'Helvetica Neue', sans-serif;
-        }
-        .css-1aumxhk, .stContainer {
-            background-color: #ffffff;
-            border-radius: 16px;
-            padding: 16px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
-        }
-        .block-container {
-            padding: 2rem 4rem;
-        }
+        .stApp { background-color: #f5f5f5; color: #2c2c2c; font-family: 'Helvetica Neue', sans-serif; }
+        .css-1aumxhk, .stContainer { background-color: #ffffff; border-radius: 16px; padding: 16px; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); }
+        .block-container { padding: 2rem 4rem; }
     </style>
     """,
     unsafe_allow_html=True,
