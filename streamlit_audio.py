@@ -66,6 +66,12 @@ def convert_to_wav(input_path: str) -> str:
     return str(output_path)
 
 
+def format_timestamp(seconds: float) -> str:
+    """Formata segundos para HH:MM:SS.mmm."""
+    millis = int((seconds - int(seconds)) * 1000)
+    return time.strftime("%H:%M:%S", time.gmtime(seconds)) + f".{millis:03d}"
+
+
 # ===============================================================
 #  Configuração de LOGS → Streamlit
 # ===============================================================
@@ -97,7 +103,6 @@ class StreamlitLogHandler(logging.Handler):
 fw_logger = logging.getLogger("faster_whisper")
 fw_logger.setLevel(logging.DEBUG)
 fw_logger.addHandler(StreamlitLogHandler(log_placeholder))
-
 
 # ===============================================================
 #  Barra lateral – Configurações
@@ -178,7 +183,6 @@ for key, default in {
     if key not in st.session_state:
         st.session_state[key] = default
 
-
 # ===============================================================
 #  Funções de transcrição com barra de progresso
 # ===============================================================
@@ -198,12 +202,16 @@ def load_whisper(model_size: str):
         compute_type = "int8"
 
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
-    # Armazenamos o nome do dispositivo para uso posterior
     model.meta_device = device  # atributo extra, não existe na lib
     return model
 
 
 def transcribe_with_progress(audio_path: str, model_size: str, language: str):
+    """Transcreve o áudio e retorna uma lista de segmentos com timestamps.
+
+    Cada item:
+        {"start": str, "end": str, "text": str}
+    """
     model = load_whisper(model_size)
 
     pbar = st.progress(0, text="Transcrevendo…")
@@ -218,19 +226,24 @@ def transcribe_with_progress(audio_path: str, model_size: str, language: str):
         language=language,
     )
 
+    processed_segments: list[dict] = []
     transcript_lines = []
-    total = None
+    total = info.duration or 0.0
 
-    for seg in segments:
-        transcript_lines.append(f"[{seg.start:7.2f}s → {seg.end:7.2f}s] {seg.text}")
+    for i, seg in enumerate(segments):
+        start_ts = format_timestamp(seg.start)
+        end_ts = format_timestamp(seg.end)
+        processed_segments.append(
+            {"start": start_ts, "end": end_ts, "text": seg.text.strip()}
+        )
+
+        transcript_lines.append(f"[{start_ts} → {end_ts}] {seg.text.strip()}")
         txt_placeholder.text("\n".join(transcript_lines))
-
-        total = info.duration or total
         if total:
             pbar.progress(min(seg.end / total, 1.0))
 
     pbar.empty()
-    return "\n".join(transcript_lines), model.meta_device
+    return processed_segments, model.meta_device
 
 
 # ===============================================================
@@ -274,9 +287,24 @@ elif input_mode == "Arquivo de Transcrição (.json)":
 
 elif input_mode == "Exemplo Interno":
     st.session_state.conversation = [
-        {"speaker": "Speaker 1", "text": "Oi, estou com um problema na minha conta."},
-        {"speaker": "Speaker 2", "text": "Claro, posso verificar isso para você."},
-        {"speaker": "Speaker 1", "text": "Quero cancelar o serviço."},
+        {
+            "speaker": "Segment 1",
+            "start": "00:00:00.000",
+            "end": "00:00:03.000",
+            "text": "Oi, estou com um problema na minha conta.",
+        },
+        {
+            "speaker": "Segment 2",
+            "start": "00:00:03.000",
+            "end": "00:00:06.000",
+            "text": "Claro, posso verificar isso para você.",
+        },
+        {
+            "speaker": "Segment 3",
+            "start": "00:00:06.000",
+            "end": "00:00:08.000",
+            "text": "Quero cancelar o serviço.",
+        },
     ]
 
 # ------------------- CONTROLES ----------------------
@@ -288,11 +316,20 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
         if st.button("🎙 Transcrever Áudio"):
             start = time.time()
             with st.spinner("Transcrevendo…"):
-                text, device_name = transcribe_with_progress(
+                segments, device_name = transcribe_with_progress(
                     st.session_state.audio_path, model_key, language
                 )
                 st.session_state.device_name = device_name
-                st.session_state.conversation = [{"speaker": "Speaker 1", "text": text}]
+                # Cada segmento vira uma "fala" independente (sem diarização)
+                st.session_state.conversation = [
+                    {
+                        "speaker": f"Segment {i+1}",
+                        "start": seg["start"],
+                        "end": seg["end"],
+                        "text": seg["text"],
+                    }
+                    for i, seg in enumerate(segments)
+                ]
             st.success(f"✅ Transcrição concluída em {time.time() - start:.2f}s")
             st.markdown(f"**Dispositivo:** `{st.session_state.device_name}`")
 
@@ -345,19 +382,9 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
 if st.session_state.conversation:
     st.subheader("💬 Conversa")
 
-    speaker_colors = {
-        "Speaker 1": "#e1ffc7",
-        "Speaker 2": "#d2e3fc",
-        "Speaker 3": "#ffe0e0",
-        "Speaker 4": "#f0e68c",
-        "Speaker 5": "#d1c4e9",
-    }
+    bubble_color = "#f0f0f0"
 
     for turn in st.session_state.conversation:
-        speaker = turn["speaker"]
-        bubble_color = speaker_colors.get(speaker, "#eeeeee")
-        alignment = "flex-start" if speaker.endswith("1") else "flex-end"
-
         sentiment_info = next(
             (
                 f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
@@ -367,11 +394,13 @@ if st.session_state.conversation:
             "",
         )
 
+        timestamp_info = f"<small>{turn['start']} → {turn['end']}</small><br>"
+
         st.markdown(
             f"""
-            <div style='display: flex; justify-content: {alignment}; padding: 4px 0;'>
-                <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 70%;'>
-                    <strong>{speaker}</strong><br>{turn['text']}{sentiment_info}
+            <div style='display: flex; justify-content: flex-start; padding: 4px 0;'>
+                <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 90%;'>
+                    <strong>{timestamp_info}</strong>{turn['text']}{sentiment_info}
                 </div>
             </div>
             """,
