@@ -6,18 +6,16 @@ import tempfile
 import matplotlib.pyplot as plt
 import spacy
 import json
-import wave
-import contextlib
-from transformers import pipeline
 import subprocess
 import time
 import logging
 from pathlib import Path
+from transformers import pipeline
 
-from faster_whisper import WhisperModel  # ➜ nova lib
+from faster_whisper import WhisperModel
 
 # ===============================================================
-#  Modelos disponíveis no Hub → dict <apelido> : <repo HF>
+# Modelos disponíveis no Hub → dict <apelido> : <repo HF>
 # ===============================================================
 _MODELS = {
     "tiny.en": "Systran/faster-whisper-tiny.en",
@@ -42,24 +40,24 @@ _MODELS = {
 }
 
 # ===============================================================
-#  Utilidades
+# Utilidades
 # ===============================================================
 
 
 def convert_to_wav(input_path: str) -> str:
-    """Converte qualquer áudio compatível com FFmpeg para mono WAV 16 kHz."""
+    """Converte qualquer áudio compatível com FFmpeg para mono WAV 16 kHz."""
     output_path = Path(input_path).with_suffix(".wav")
     command = [
         "ffmpeg",
-        "-y",  # overwrite
+        "-y",
         "-i",
         input_path,
         "-acodec",
         "pcm_s16le",
         "-ac",
-        "1",  # mono
+        "1",
         "-ar",
-        "16000",  # 16 kHz
+        "16000",
         str(output_path),
     ]
     subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -73,9 +71,9 @@ def format_timestamp(seconds: float) -> str:
 
 
 # ===============================================================
-#  Configuração de LOGS → Streamlit
+# Configuração de LOGS → Streamlit
 # ===============================================================
-log_placeholder = st.empty()  # espaço para mostrar logs "verbose"
+log_placeholder = st.empty()
 
 
 class StreamlitLogHandler(logging.Handler):
@@ -99,13 +97,12 @@ class StreamlitLogHandler(logging.Handler):
         self.placeholder.code("\n".join(self.lines), language="text")
 
 
-# Aponta o logger interno do faster-whisper para o handler acima
 fw_logger = logging.getLogger("faster_whisper")
 fw_logger.setLevel(logging.DEBUG)
 fw_logger.addHandler(StreamlitLogHandler(log_placeholder))
 
 # ===============================================================
-#  Barra lateral – Configurações
+# Barra lateral – Configurações
 # ===============================================================
 
 st.set_page_config(page_title="Voice Intelligence – faster-whisper", layout="wide")
@@ -122,7 +119,6 @@ with st.sidebar:
         "Modelo de Sentimento:", ("spaCy local", "Transformers (online)")
     )
 
-    # Select com os apelidos dos modelos disponíveis
     model_key = st.selectbox(
         "Modelo faster-whisper",
         list(_MODELS.keys()),
@@ -162,15 +158,35 @@ with st.sidebar:
         index=0,
     )
 
+    device_choice = st.selectbox(
+        "Dispositivo de inferência",
+        ["Auto", "cuda", "mps", "cpu"],
+        index=0,
+        format_func=lambda x: {
+            "Auto": "Automático",
+            "cuda": "CUDA (GPU)",
+            "mps": "MPS (Apple Silicon)",
+            "cpu": "CPU",
+        }.get(x, x),
+    )
+
+    compute_choice = st.selectbox(
+        "Precisão (compute_type)",
+        ["Auto", "float16", "int8", "int8_float16"],
+        index=0,
+    )
+
+    stream_live = st.checkbox("Mostrar transcrição em tempo real", value=True)
+
 # ===============================================================
-#  Modelos de Sentimento & Intenção
+# Modelos de Sentimento & Intenção
 # ===============================================================
 
 nlp_sentiment = spacy.load("spacy_model/model-best")
 intent_model = pipeline("text-classification", model="bert-base-uncased")
 
 # ===============================================================
-#  Session State (inicializa chaves)
+# Session State
 # ===============================================================
 
 for key, default in {
@@ -184,35 +200,58 @@ for key, default in {
         st.session_state[key] = default
 
 # ===============================================================
-#  Funções de transcrição com barra de progresso
+# Funções auxiliares de modelo
 # ===============================================================
 
 
+def resolve_device(device_choice: str) -> str:
+    if device_choice == "Auto":
+        if torch.cuda.is_available():
+            return "cuda"
+        if torch.backends.mps.is_available():
+            return "mps"
+        return "cpu"
+    return device_choice
+
+
+def resolve_compute_type(device: str, compute_choice: str) -> str:
+    if compute_choice != "Auto":
+        return compute_choice
+    # Heurística padrão
+    if device in {"cuda", "mps"}:
+        return "float16"
+    return "int8"
+
+
 @st.cache_resource(show_spinner="🔄 Carregando modelo faster-whisper…")
-def load_whisper(model_size: str):
-    """Carrega o modelo apenas 1× (cache). Também anota em qual dispositivo."""
-    if torch.cuda.is_available():
-        device = "cuda"
-        compute_type = "float16"
-    # elif torch.backends.mps.is_available():
-    #     device = "mps"
-    #     compute_type = "float16"
-    else:
+def load_whisper(model_size: str, device_choice: str, compute_choice: str):
+    device = resolve_device(device_choice)
+    compute_type = resolve_compute_type(device, compute_choice)
+
+    # Validação rápida
+    if device == "cuda" and not torch.cuda.is_available():
+        st.warning("CUDA não disponível—trocando para CPU.")
+        device = "cpu"
+        compute_type = "int8"
+    if device == "mps" and not torch.backends.mps.is_available():
+        st.warning("MPS não disponível—trocando para CPU.")
         device = "cpu"
         compute_type = "int8"
 
     model = WhisperModel(model_size, device=device, compute_type=compute_type)
-    model.meta_device = device  # atributo extra, não existe na lib
+    model.meta_device = device
+    model.meta_compute = compute_type
     return model
 
-
-def transcribe_with_progress(audio_path: str, model_size: str, language: str):
-    """Transcreve o áudio e retorna uma lista de segmentos com timestamps.
-
-    Cada item:
-        {"start": str, "end": str, "text": str}
-    """
-    model = load_whisper(model_size)
+def transcribe_with_progress(
+    audio_path: str,
+    model_size: str,
+    language: str,
+    device_choice: str,
+    compute_choice: str,
+    stream_live: bool = True,
+):
+    model = load_whisper(model_size, device_choice, compute_choice)
 
     pbar = st.progress(0, text="Transcrevendo…")
     txt_placeholder = st.empty()
@@ -227,23 +266,48 @@ def transcribe_with_progress(audio_path: str, model_size: str, language: str):
     )
 
     processed_segments: list[dict] = []
-    transcript_lines = []
     total = info.duration or 0.0
 
-    for i, seg in enumerate(segments):
+    for seg in segments:
         start_ts = format_timestamp(seg.start)
         end_ts = format_timestamp(seg.end)
-        processed_segments.append(
-            {"start": start_ts, "end": end_ts, "text": seg.text.strip()}
-        )
+        text = seg.text.strip()
 
-        transcript_lines.append(f"[{start_ts} → {end_ts}] {seg.text.strip()}")
-        txt_placeholder.text("\n".join(transcript_lines))
+        if stream_live:
+            partial_text = ""
+            for char in text:
+                partial_text += char
+                current_display = processed_segments + [
+                    {"start": start_ts, "end": end_ts, "text": partial_text}
+                ]
+                txt_placeholder.text(
+                    "\n".join(
+                        [
+                            f"[{s['start']} → {s['end']}] {s['text']}"
+                            for s in current_display
+                        ]
+                    )
+                )
+                time.sleep(0.01)  # Ajuste o tempo se quiser mais rápido/lento
+            # Após o streaming, registra o segmento completo (sem reexibir)
+            processed_segments.append({"start": start_ts, "end": end_ts, "text": text})
+        else:
+            # Modo batch: apenas salva e atualiza o display no final
+            processed_segments.append({"start": start_ts, "end": end_ts, "text": text})
+            txt_placeholder.text(
+                "\n".join(
+                    [
+                        f"[{s['start']} → {s['end']}] {s['text']}"
+                        for s in processed_segments
+                    ]
+                )
+            )
+
         if total:
             pbar.progress(min(seg.end / total, 1.0))
 
     pbar.empty()
-    return processed_segments, model.meta_device
+    return processed_segments, model.meta_device, model.meta_compute
 
 
 # ===============================================================
@@ -316,10 +380,16 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
         if st.button("🎙 Transcrever Áudio"):
             start = time.time()
             with st.spinner("Transcrevendo…"):
-                segments, device_name = transcribe_with_progress(
-                    st.session_state.audio_path, model_key, language
+                segments, device_name, compute_type = transcribe_with_progress(
+                    st.session_state.audio_path,
+                    model_key,
+                    language,
+                    device_choice,
+                    compute_choice,
+                    stream_live,
                 )
                 st.session_state.device_name = device_name
+                st.session_state.compute_type = compute_type
                 # Cada segmento vira uma "fala" independente (sem diarização)
                 st.session_state.conversation = [
                     {
