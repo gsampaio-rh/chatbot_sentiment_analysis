@@ -280,7 +280,7 @@ def transcribe_with_progress(
                 current_display = processed_segments + [
                     {"start": start_ts, "end": end_ts, "text": partial_text}
                 ]
-                txt_placeholder.text(
+                txt_placeholder.code(
                     "\n".join(
                         [
                             f"[{s['start']} → {s['end']}] {s['text']}"
@@ -294,7 +294,7 @@ def transcribe_with_progress(
         else:
             # Modo batch: apenas salva e atualiza o display no final
             processed_segments.append({"start": start_ts, "end": end_ts, "text": text})
-            txt_placeholder.text(
+            txt_placeholder.code(
                 "\n".join(
                     [
                         f"[{s['start']} → {s['end']}] {s['text']}"
@@ -377,31 +377,32 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
 
     # ---------- TRANSCRIÇÃO ----------
     with col1:
-        if st.button("🎙 Transcrever Áudio"):
-            start = time.time()
-            with st.spinner("Transcrevendo…"):
-                segments, device_name, compute_type = transcribe_with_progress(
-                    st.session_state.audio_path,
-                    model_key,
-                    language,
-                    device_choice,
-                    compute_choice,
-                    stream_live,
-                )
-                st.session_state.device_name = device_name
-                st.session_state.compute_type = compute_type
-                # Cada segmento vira uma "fala" independente (sem diarização)
-                st.session_state.conversation = [
-                    {
-                        "speaker": f"Segment {i+1}",
-                        "start": seg["start"],
-                        "end": seg["end"],
-                        "text": seg["text"],
-                    }
-                    for i, seg in enumerate(segments)
-                ]
-            st.success(f"✅ Transcrição concluída em {time.time() - start:.2f}s")
-            st.markdown(f"**Dispositivo:** `{st.session_state.device_name}`")
+        transcribe_clicked = st.button("🎙 Transcrever Áudio")
+
+    if transcribe_clicked:
+        start = time.time()
+        with st.spinner("Transcrevendo…"):
+            segments, device_name, compute_type = transcribe_with_progress(
+                st.session_state.audio_path,
+                model_key,
+                language,
+                device_choice,
+                compute_choice,
+                stream_live,
+            )
+            st.session_state.device_name = device_name
+            st.session_state.compute_type = compute_type
+            st.session_state.conversation = [
+                {
+                    "speaker": f"Segment {i+1}",
+                    "start": seg["start"],
+                    "end": seg["end"],
+                    "text": seg["text"],
+                }
+                for i, seg in enumerate(segments)
+            ]
+        st.success(f"✅ Transcrição concluída em {time.time() - start:.2f}s")
+        st.markdown(f"**Dispositivo:** `{st.session_state.device_name}`")
 
     # ---------- SENTIMENTO ----------
     with col2:
