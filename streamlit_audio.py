@@ -463,41 +463,91 @@ with tab_main:
                 result = intent_model(full_text)[0]
             st.session_state.intent = result
             st.success(f"✅ Intenção detectada em {time.time() - start:.2f}s")
-
-    # ------------------- EXIBIÇÃO DA CONVERSA ----------------------
+    
+    # ------------------- VISUALIZAÇÃO COMPARATIVA ----------------------
     if st.session_state.conversation:
-        st.subheader("💬 Conversa")
+        st.subheader("💬 Conversa e Análise")
 
-        bubble_color = "#f0f0f0"
+        col_conv, col_analysis = st.columns([2, 1])
 
-        for turn in st.session_state.conversation:
-            sentiment_info = next(
-                (
-                    f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
-                    for s in st.session_state.sentiments
-                    if s["text"] == turn["text"]
-                ),
-                "",
-            )
+        # ========= Coluna da Conversa ==========
+        with col_conv:
+            bubble_color = "#f0f0f0"
+            for turn in st.session_state.conversation:
+                sentiment_info = next(
+                    (
+                        f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
+                        for s in st.session_state.sentiments
+                        if s["text"] == turn["text"]
+                    ),
+                    "",
+                )
+                timestamp_info = f"<small>{turn['start']} → {turn['end']}</small><br>"
 
-            timestamp_info = f"<small>{turn['start']} → {turn['end']}</small><br>"
-
-            st.markdown(
-                f"""
-                <div style='display: flex; justify-content: flex-start; padding: 4px 0;'>
-                    <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 90%;'>
-                        <strong>{timestamp_info}</strong>{turn['text']}{sentiment_info}
+                st.markdown(
+                    f"""
+                    <div style='display: flex; justify-content: flex-start; padding: 4px 0;'>
+                        <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 90%;'>
+                            <strong>{timestamp_info}</strong>{turn['text']}{sentiment_info}
+                        </div>
                     </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
-            )
+                    """,
+                    unsafe_allow_html=True,
+                )
 
-        if st.session_state.intent:
-            st.subheader("🎯 Intenção detectada")
-            st.markdown(
-                f"**{st.session_state.intent['label']}** ({st.session_state.intent['score']*100:.1f}%)"
-            )
+        # ========= Coluna da Análise ==========
+        with col_analysis:
+            if st.session_state.intent:
+                st.markdown("### 🎯 Intenção Detectada")
+                st.markdown(
+                    f"**{st.session_state.intent['label']}** ({st.session_state.intent['score']*100:.1f}%)"
+                )
+
+            # Análise agregada de sentimento
+            if st.session_state.sentiments:
+                import pandas as pd
+                import matplotlib.pyplot as plt
+
+                sentiments_df = pd.DataFrame(st.session_state.sentiments)
+                st.markdown("### 📊 Sentimentos Detectados")
+
+                sentiment_counts = sentiments_df["label"].value_counts()
+                fig, ax = plt.subplots()
+                ax.pie(
+                    sentiment_counts,
+                    labels=sentiment_counts.index,
+                    autopct="%1.1f%%",
+                    startangle=90,
+                )
+                ax.axis("equal")
+                st.pyplot(fig)
+
+    # ------------------- Análise Final Agregada ----------------------
+    # if st.session_state.sentiments:
+    #     import pandas as pd
+    #     import matplotlib.pyplot as plt
+
+    #     sentiments_df = pd.DataFrame(st.session_state.sentiments)
+
+    #     st.markdown("---")
+    #     st.markdown("### 📈 Estatísticas Agregadas")
+
+    #     col1, col2 = st.columns(2)
+
+    #     with col1:
+    #         st.markdown("#### 🎯 Intenção")
+    #         st.bar_chart(
+    #             pd.Series(
+    #                 [st.session_state.intent["score"]],
+    #                 index=[st.session_state.intent["label"]],
+    #             )
+    #         )
+
+    #     with col2:
+    #         st.markdown("#### 😊 Sentimentos")
+    #         sentiment_bar = sentiments_df["label"].value_counts()
+    #         st.bar_chart(sentiment_bar)
+
 
 with tab_models:
     st.header("📊 Infraestrutura e Modelos")
