@@ -200,3 +200,11 @@ corpus/
 configs/
 
 dataset/
+
+audios/
+
+transcripts/
+
+fine_tuned_intent_bert/
+
+intent_model/
