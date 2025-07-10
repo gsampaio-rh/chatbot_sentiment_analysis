@@ -183,7 +183,7 @@ with st.sidebar:
 # ===============================================================
 
 nlp_sentiment = spacy.load("spacy_model/model-best")
-intent_model = pipeline("text-classification", model="bert-base-uncased")
+intent_model = pipeline("text-classification", model="fine_tuned_intent_bert")
 
 # ===============================================================
 # Session State
