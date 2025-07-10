@@ -116,13 +116,13 @@ with st.sidebar:
     )
 
     sentiment_choice = st.radio(
-        "Modelo de Sentimento:", ("spaCy local", "Transformers (online)")
+        "Modelo de Sentimento:", ("spaCy local", "Transformers")
     )
 
     model_key = st.selectbox(
         "Modelo faster-whisper",
         list(_MODELS.keys()),
-        index=list(_MODELS.keys()).index("base"),
+        index=list(_MODELS.keys()).index("large-v3"),
     )
 
     language = st.selectbox(
@@ -373,11 +373,17 @@ elif input_mode == "Exemplo Interno":
 
 # ------------------- CONTROLES ----------------------
 if input_mode == "MP3/WAV" and st.session_state.audio_path:
+    # ========== TOP ROW: 3 buttons ==========
     col1, col2, col3 = st.columns(3)
 
-    # ---------- TRANSCRIÇÃO ----------
     with col1:
         transcribe_clicked = st.button("🎙 Transcrever Áudio")
+
+    with col2:
+        sentiment_clicked = st.button("🧠 Analisar Sentimento")
+
+    with col3:
+        intent_clicked = st.button("🎯 Detectar Intenção")
 
     if transcribe_clicked:
         start = time.time()
@@ -405,49 +411,43 @@ if input_mode == "MP3/WAV" and st.session_state.audio_path:
         st.markdown(f"**Dispositivo:** `{st.session_state.device_name}`")
 
     # ---------- SENTIMENTO ----------
-    with col2:
-        if st.button(
-            "🧠 Analisar Sentimento", disabled=not st.session_state.conversation
-        ):
-            start = time.time()
-            results = []
-            with st.spinner("Analisando sentimentos…"):
-                for turn in st.session_state.conversation:
-                    if sentiment_choice == "spaCy local":
-                        doc = nlp_sentiment(turn["text"])
-                        cats = doc.cats
-                        label = max(cats, key=cats.get)
-                        score = cats[label]
-                    else:
-                        sent_model = pipeline(
-                            "text-classification",
-                            model="pysentimiento/bertweet-pt-sentiment",
-                        )
-                        r = sent_model(turn["text"])[0]
-                        label = r["label"]
-                        score = r["score"]
-                    results.append(
-                        {
-                            "speaker": turn["speaker"],
-                            "text": turn["text"],
-                            "label": label,
-                            "score": score,
-                        }
+    if sentiment_clicked:
+        start = time.time()
+        results = []
+        with st.spinner("Analisando sentimentos…"):
+            for turn in st.session_state.conversation:
+                if sentiment_choice == "spaCy local":
+                    doc = nlp_sentiment(turn["text"])
+                    cats = doc.cats
+                    label = max(cats, key=cats.get)
+                    score = cats[label]
+                else:
+                    sent_model = pipeline(
+                        "text-classification",
+                        model="pysentimiento/bertweet-pt-sentiment",
                     )
-            st.session_state.sentiments = results
-            st.success(f"✅ Sentimentos analisados em {time.time() - start:.2f}s")
+                    r = sent_model(turn["text"])[0]
+                    label = r["label"]
+                    score = r["score"]
+                results.append(
+                    {
+                        "speaker": turn["speaker"],
+                        "text": turn["text"],
+                        "label": label,
+                        "score": score,
+                    }
+                )
+        st.session_state.sentiments = results
+        st.success(f"✅ Sentimentos analisados em {time.time() - start:.2f}s")
 
     # ---------- INTENÇÃO ----------
-    with col3:
-        if st.button(
-            "🎯 Detectar Intenção", disabled=not st.session_state.conversation
-        ):
-            start = time.time()
-            full_text = " ".join([x["text"] for x in st.session_state.conversation])
-            with st.spinner("Detectando intenção…"):
-                result = intent_model(full_text)[0]
-            st.session_state.intent = result
-            st.success(f"✅ Intenção detectada em {time.time() - start:.2f}s")
+    if intent_clicked:
+        start = time.time()
+        full_text = " ".join([x["text"] for x in st.session_state.conversation])
+        with st.spinner("Detectando intenção…"):
+            result = intent_model(full_text)[0]
+        st.session_state.intent = result
+        st.success(f"✅ Intenção detectada em {time.time() - start:.2f}s")
 
 # ------------------- EXIBIÇÃO DA CONVERSA ----------------------
 if st.session_state.conversation:
