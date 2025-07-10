@@ -319,171 +319,6 @@ st.markdown(
     "Upload de áudio ou texto para análise de transcrição, sentimento e intenção."
 )
 
-if input_mode == "MP3/WAV":
-    uploaded_file = st.file_uploader(
-        "🔊 Envie um arquivo de áudio", type=["wav", "mp3"]
-    )
-    if uploaded_file:
-        st.audio(uploaded_file)
-        with tempfile.NamedTemporaryFile(
-            delete=False, suffix="." + uploaded_file.name.split(".")[-1]
-        ) as tmp_in:
-            tmp_in.write(uploaded_file.read())
-            raw_path = tmp_in.name
-        wav_path = convert_to_wav(raw_path)
-        st.session_state.audio_path = wav_path
-        st.success("✅ Áudio carregado e convertido para WAV!")
-
-        y, sr = librosa.load(wav_path, sr=None)
-        plt.figure(figsize=(10, 1))
-        plt.plot(y)
-        plt.title("Forma de onda do áudio")
-        plt.xlabel("Amostras")
-        plt.ylabel("Amplitude")
-        st.pyplot(plt.gcf())
-
-elif input_mode == "Arquivo de Transcrição (.json)":
-    uploaded_json = st.file_uploader(
-        "📄 Envie o arquivo de transcrição (.json)", type=["json"]
-    )
-    if uploaded_json:
-        st.session_state.conversation = json.load(uploaded_json)
-
-elif input_mode == "Exemplo Interno":
-    st.session_state.conversation = [
-        {
-            "speaker": "Segment 1",
-            "start": "00:00:00.000",
-            "end": "00:00:03.000",
-            "text": "Oi, estou com um problema na minha conta.",
-        },
-        {
-            "speaker": "Segment 2",
-            "start": "00:00:03.000",
-            "end": "00:00:06.000",
-            "text": "Claro, posso verificar isso para você.",
-        },
-        {
-            "speaker": "Segment 3",
-            "start": "00:00:06.000",
-            "end": "00:00:08.000",
-            "text": "Quero cancelar o serviço.",
-        },
-    ]
-
-# ------------------- CONTROLES ----------------------
-if input_mode == "MP3/WAV" and st.session_state.audio_path:
-    # ========== TOP ROW: 3 buttons ==========
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        transcribe_clicked = st.button("🎙 Transcrever Áudio")
-
-    with col2:
-        sentiment_clicked = st.button("🧠 Analisar Sentimento")
-
-    with col3:
-        intent_clicked = st.button("🎯 Detectar Intenção")
-
-    if transcribe_clicked:
-        start = time.time()
-        with st.spinner("Transcrevendo…"):
-            segments, device_name, compute_type = transcribe_with_progress(
-                st.session_state.audio_path,
-                model_key,
-                language,
-                device_choice,
-                compute_choice,
-                stream_live,
-            )
-            st.session_state.device_name = device_name
-            st.session_state.compute_type = compute_type
-            st.session_state.conversation = [
-                {
-                    "speaker": f"Segment {i+1}",
-                    "start": seg["start"],
-                    "end": seg["end"],
-                    "text": seg["text"],
-                }
-                for i, seg in enumerate(segments)
-            ]
-        st.success(f"✅ Transcrição concluída em {time.time() - start:.2f}s")
-        st.markdown(f"**Dispositivo:** `{st.session_state.device_name}`")
-
-    # ---------- SENTIMENTO ----------
-    if sentiment_clicked:
-        start = time.time()
-        results = []
-        with st.spinner("Analisando sentimentos…"):
-            for turn in st.session_state.conversation:
-                if sentiment_choice == "spaCy local":
-                    doc = nlp_sentiment(turn["text"])
-                    cats = doc.cats
-                    label = max(cats, key=cats.get)
-                    score = cats[label]
-                else:
-                    sent_model = pipeline(
-                        "text-classification",
-                        model="pysentimiento/bertweet-pt-sentiment",
-                    )
-                    r = sent_model(turn["text"])[0]
-                    label = r["label"]
-                    score = r["score"]
-                results.append(
-                    {
-                        "speaker": turn["speaker"],
-                        "text": turn["text"],
-                        "label": label,
-                        "score": score,
-                    }
-                )
-        st.session_state.sentiments = results
-        st.success(f"✅ Sentimentos analisados em {time.time() - start:.2f}s")
-
-    # ---------- INTENÇÃO ----------
-    if intent_clicked:
-        start = time.time()
-        full_text = " ".join([x["text"] for x in st.session_state.conversation])
-        with st.spinner("Detectando intenção…"):
-            result = intent_model(full_text)[0]
-        st.session_state.intent = result
-        st.success(f"✅ Intenção detectada em {time.time() - start:.2f}s")
-
-# ------------------- EXIBIÇÃO DA CONVERSA ----------------------
-if st.session_state.conversation:
-    st.subheader("💬 Conversa")
-
-    bubble_color = "#f0f0f0"
-
-    for turn in st.session_state.conversation:
-        sentiment_info = next(
-            (
-                f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
-                for s in st.session_state.sentiments
-                if s["text"] == turn["text"]
-            ),
-            "",
-        )
-
-        timestamp_info = f"<small>{turn['start']} → {turn['end']}</small><br>"
-
-        st.markdown(
-            f"""
-            <div style='display: flex; justify-content: flex-start; padding: 4px 0;'>
-                <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 90%;'>
-                    <strong>{timestamp_info}</strong>{turn['text']}{sentiment_info}
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    if st.session_state.intent:
-        st.subheader("🎯 Intenção detectada")
-        st.markdown(
-            f"**{st.session_state.intent['label']}** ({st.session_state.intent['score']*100:.1f}%)"
-        )
-
 # ------------------- ESTILO GLOBAL ----------------------
 st.markdown(
     """
@@ -495,3 +330,251 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+tab_main, tab_models = st.tabs(["🏠 Aplicação", "📊 Infraestrutura e Modelos"])
+
+with tab_main:
+    if input_mode == "MP3/WAV":
+        uploaded_file = st.file_uploader(
+            "🔊 Envie um arquivo de áudio", type=["wav", "mp3"]
+        )
+        if uploaded_file:
+            st.audio(uploaded_file)
+            with tempfile.NamedTemporaryFile(
+                delete=False, suffix="." + uploaded_file.name.split(".")[-1]
+            ) as tmp_in:
+                tmp_in.write(uploaded_file.read())
+                raw_path = tmp_in.name
+            wav_path = convert_to_wav(raw_path)
+            st.session_state.audio_path = wav_path
+            st.success("✅ Áudio carregado e convertido para WAV!")
+
+            y, sr = librosa.load(wav_path, sr=None)
+            plt.figure(figsize=(10, 1))
+            plt.plot(y)
+            plt.title("Forma de onda do áudio")
+            plt.xlabel("Amostras")
+            plt.ylabel("Amplitude")
+            st.pyplot(plt.gcf())
+
+    elif input_mode == "Arquivo de Transcrição (.json)":
+        uploaded_json = st.file_uploader(
+            "📄 Envie o arquivo de transcrição (.json)", type=["json"]
+        )
+        if uploaded_json:
+            st.session_state.conversation = json.load(uploaded_json)
+
+    elif input_mode == "Exemplo Interno":
+        st.session_state.conversation = [
+            {
+                "speaker": "Segment 1",
+                "start": "00:00:00.000",
+                "end": "00:00:03.000",
+                "text": "Oi, estou com um problema na minha conta.",
+            },
+            {
+                "speaker": "Segment 2",
+                "start": "00:00:03.000",
+                "end": "00:00:06.000",
+                "text": "Claro, posso verificar isso para você.",
+            },
+            {
+                "speaker": "Segment 3",
+                "start": "00:00:06.000",
+                "end": "00:00:08.000",
+                "text": "Quero cancelar o serviço.",
+            },
+        ]
+
+    # ------------------- CONTROLES ----------------------
+    if input_mode == "MP3/WAV" and st.session_state.audio_path:
+        # ========== TOP ROW: 3 buttons ==========
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            transcribe_clicked = st.button("🎙 Transcrever Áudio")
+
+        with col2:
+            sentiment_clicked = st.button("🧠 Analisar Sentimento")
+
+        with col3:
+            intent_clicked = st.button("🎯 Detectar Intenção")
+
+        if transcribe_clicked:
+            start = time.time()
+            with st.spinner("Transcrevendo…"):
+                segments, device_name, compute_type = transcribe_with_progress(
+                    st.session_state.audio_path,
+                    model_key,
+                    language,
+                    device_choice,
+                    compute_choice,
+                    stream_live,
+                )
+                st.session_state.device_name = device_name
+                st.session_state.compute_type = compute_type
+                st.session_state.conversation = [
+                    {
+                        "speaker": f"Segment {i+1}",
+                        "start": seg["start"],
+                        "end": seg["end"],
+                        "text": seg["text"],
+                    }
+                    for i, seg in enumerate(segments)
+                ]
+            st.success(f"✅ Transcrição concluída em {time.time() - start:.2f}s")
+            st.markdown(f"**Dispositivo:** `{st.session_state.device_name}`")
+
+        # ---------- SENTIMENTO ----------
+        if sentiment_clicked:
+            start = time.time()
+            results = []
+            with st.spinner("Analisando sentimentos…"):
+                for turn in st.session_state.conversation:
+                    if sentiment_choice == "spaCy local":
+                        doc = nlp_sentiment(turn["text"])
+                        cats = doc.cats
+                        label = max(cats, key=cats.get)
+                        score = cats[label]
+                    else:
+                        sent_model = pipeline(
+                            "text-classification",
+                            model="pysentimiento/bertweet-pt-sentiment",
+                        )
+                        r = sent_model(turn["text"])[0]
+                        label = r["label"]
+                        score = r["score"]
+                    results.append(
+                        {
+                            "speaker": turn["speaker"],
+                            "text": turn["text"],
+                            "label": label,
+                            "score": score,
+                        }
+                    )
+            st.session_state.sentiments = results
+            st.success(f"✅ Sentimentos analisados em {time.time() - start:.2f}s")
+
+        # ---------- INTENÇÃO ----------
+        if intent_clicked:
+            start = time.time()
+            full_text = " ".join([x["text"] for x in st.session_state.conversation])
+            with st.spinner("Detectando intenção…"):
+                result = intent_model(full_text)[0]
+            st.session_state.intent = result
+            st.success(f"✅ Intenção detectada em {time.time() - start:.2f}s")
+
+    # ------------------- EXIBIÇÃO DA CONVERSA ----------------------
+    if st.session_state.conversation:
+        st.subheader("💬 Conversa")
+
+        bubble_color = "#f0f0f0"
+
+        for turn in st.session_state.conversation:
+            sentiment_info = next(
+                (
+                    f"<br><small>Sentimento: {s['label']} ({s['score']*100:.1f}%)</small>"
+                    for s in st.session_state.sentiments
+                    if s["text"] == turn["text"]
+                ),
+                "",
+            )
+
+            timestamp_info = f"<small>{turn['start']} → {turn['end']}</small><br>"
+
+            st.markdown(
+                f"""
+                <div style='display: flex; justify-content: flex-start; padding: 4px 0;'>
+                    <div style='background-color: {bubble_color}; padding: 10px 16px; border-radius: 12px; max-width: 90%;'>
+                        <strong>{timestamp_info}</strong>{turn['text']}{sentiment_info}
+                    </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        if st.session_state.intent:
+            st.subheader("🎯 Intenção detectada")
+            st.markdown(
+                f"**{st.session_state.intent['label']}** ({st.session_state.intent['score']*100:.1f}%)"
+            )
+
+with tab_models:
+    st.header("📊 Infraestrutura e Modelos")
+    st.markdown(
+        """
+    Este aplicativo combina modelos de transcrição de áudio, análise de sentimento e detecção de intenção. Abaixo estão detalhes técnicos relevantes para a equipe de infraestrutura e arquitetura:
+
+    ---
+
+    ### 🎙️ 1. Transcrição de Voz – `faster-whisper`
+
+    - **Biblioteca:** CTranslate2 (modelo Whisper otimizado)
+    - **Modelos disponíveis:** de `tiny` até `large-v3`, além de versões `distil` e `turbo`
+    - **Dispositivos compatíveis:** CPU, CUDA (GPU NVIDIA), MPS (Apple Silicon)
+    - **Precisões suportadas:** `int8`, `float16`, `int8_float16`, `float32`
+    
+    **Estimativas por modelo (30s de áudio):**
+
+    | Modelo           | VRAM (float16) | Latência GPU (s) | Latência CPU (s) | Velocidade (x real-time) |
+    |------------------|----------------|------------------|------------------|---------------------------|
+    | `tiny`           | ~0.4 GB        | ~0.5s            | ~2.5s            | 8–10x                     |
+    | `base`           | ~0.7 GB        | ~0.8s            | ~4s              | 5–6x                      |
+    | `small`          | ~1.2 GB        | ~2s              | ~7s              | 3–4x                      |
+    | `medium`         | ~2.6 GB        | ~4.5s            | ~12–15s          | 1.5–2x                    |
+    | `large-v3`       | ~4.8 GB        | ~7s              | ~20–25s          | ~1x                       |
+    | `distil-*`       | ~2–3 GB        | ~3–4s            | ~10s             | 2–3x                      |
+
+    > ⚙️ **Nota**: `turbo` e `distil-*` são boas opções para baixa latência e custo.
+
+    ---
+
+    ### 🧠 2. Análise de Sentimento
+
+    **Opções:**
+    - `spaCy local`: leve, roda totalmente em CPU, <300ms por frase
+    - `transformers`: `bertweet-pt-sentiment` (GPU opcional)
+
+    | Modelo         | Latência CPU | Latência GPU | Memória RAM | VRAM |
+    |----------------|--------------|--------------|--------------|------|
+    | `spaCy`        | ~200–300ms   | —            | ~300MB       | —    |
+    | HF Transformers| ~500–700ms   | ~200ms       | ~800MB       | ~1.5GB|
+
+    ---
+
+    ### 🎯 3. Detecção de Intenção
+
+    - **Modelo:** `bert-base-uncased` via `text-classification`
+    - **Texto de entrada:** concatenação da transcrição
+    - **Latência esperada:** ~1.5s (CPU), ~0.5–0.7s (GPU)
+    - **Memória estimada:** ~1.2GB RAM, ~1.6GB VRAM
+
+    ---
+
+    ### 🖥️ Requisitos de Hardware
+
+    | Cenário                | CPU          | RAM     | GPU              | Observações                          |
+    |------------------------|--------------|---------|------------------|--------------------------------------|
+    | Desenvolvimento        | 4c           | 8GB     | Nenhuma          | Uso local leve                       |
+    | Produção leve          | 8c           | 16GB    | Apple Silicon    | `small`/`distil`                     |
+    | Batch em nuvem         | 8–16c        | 32GB    | T4 / A10          | `medium`/`large-v3` com bom custo    |
+    | Tempo real / escalável| 16c+          | 64GB+   | A10 / A100       | ~1s de latência total                |
+
+    ---
+
+    ### ⏱️ Estimativas de Latência (30s de áudio, 5 frases)
+
+    | Modelo         | Dispositivo | Transcrição | Sentimento | Intenção | Total Estimado |
+    |----------------|-------------|-------------|------------|----------|----------------|
+    | `tiny`         | CPU         | ~8s         | 2s         | 1.5s     | ~11.5s         |
+    | `large-v3`     | GPU (T4)    | ~6s         | 1s         | 0.6s     | ~7.6s          |
+    | `distil-large` | GPU (A10)   | ~4.5s       | 0.8s       | 0.4s     | ~5.7s          |
+
+    ---
+    """
+    )
+
+    st.code(
+        f"Dispositivo de inferência detectado: {st.session_state.get('device_name', 'Não identificado')}",
+        language="bash",
+    )
